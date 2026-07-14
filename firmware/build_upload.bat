@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 REM ============================================================
 REM  ReminderESP32  -  build + upload to the board
 REM  Usage:   build_upload.bat            (uses COM8)
@@ -30,15 +30,30 @@ echo   FQBN : %FQBN%
 echo ============================================================
 echo.
 
+REM arduino-cli flashes with "--before default-reset --after hard-reset",
+REM so the board reboots into the new firmware by itself once this succeeds.
 "%ACLI%" compile --upload -p %PORT% --fqbn "%FQBN%" "%SKETCH%"
 set "RC=%ERRORLEVEL%"
 
+REM One automatic retry: a board that is mid-boot or briefly holding the port
+REM will refuse the first reset, and a second attempt almost always lands.
+if not "%RC%"=="0" (
+  echo.
+  echo [RETRY] First attempt failed - trying once more...
+  timeout /t 2 /nobreak >nul
+  "%ACLI%" compile --upload -p %PORT% --fqbn "%FQBN%" "%SKETCH%"
+  set "RC=!ERRORLEVEL!"
+)
+
 echo.
 if "%RC%"=="0" (
-  echo [SUCCESS] Uploaded to %PORT%.
+  echo [SUCCESS] Uploaded to %PORT% - the board is restarting into the new firmware.
 ) else (
   echo [FAILED] exit code %RC%
+  echo   - Close any Serial Monitor / terminal holding %PORT% and try again.
   echo   - Is the board plugged in and on %PORT%?  Check with:  list_ports.bat
+  echo   - Still failing? Force the bootloader: hold BOOT, tap RESET,
+  echo     release BOOT, then re-run this script.
   echo   - First time on a new PC?  Run  setup.bat  once.
 )
 echo.

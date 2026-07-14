@@ -50,10 +50,14 @@ void imu_service() {
 
   uint32_t now = millis();
   if (now - armedAt < TAP_SETTLE_MS) return;            // ignore just-armed transient
-  if (delta > g_tapThreshold && (now - lastTap) > TAP_DEBOUNCE_MS) {
+  // Never trust a threshold under the sensor's own noise floor — a stale config
+  // could still hold one, and it would turn idle noise into a stream of phantom
+  // taps that silently dismiss every alert.
+  float thr = g_tapThreshold < TAP_MIN_G ? TAP_MIN_G : g_tapThreshold;
+  if (delta > thr && (now - lastTap) > TAP_DEBOUNCE_MS) {
     lastTap = now;
     s_tapPending = true;
-    Serial.printf("[imu] TAP jerk=%.2f thr=%.2f\n", delta, g_tapThreshold);
+    Serial.printf("[imu] tap %.2fg (thr %.2f)\r\n", delta, thr);
   }
 }
 

@@ -1,20 +1,21 @@
 name: build & release
 
-# Compiles the firmware for the ESP32-C6 on every push, and — when you push a
-# version tag like v1.0.0 — publishes a GitHub Release with a one-click flasher
-# (bundled esptool + the .bin + a click-to-run script) for Windows, macOS and Linux.
+# Every push to main compiles the firmware for the ESP32-C6 and publishes a
+# release automatically — no manual tagging. The version comes from FW_VERSION
+# in firmware/ReminderESP32/config.h: bump it and the next push cuts that
+# release (one-click Windows/macOS/Linux flashers + the merged .bin), and also
+# publishes the .bin to the in-browser web flasher.
 
 on:
   push:
     branches: [ main ]
     paths-ignore: [ 'docs/firmware/**' ]   # the auto-published firmware commit must not re-trigger
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 permissions:
-  contents: write        # needed to create the Release
+  contents: write        # needed to create the tag + Release and push the web-flasher firmware
 
 env:
   FQBN: "esp32:esp32:esp32c6:PartitionScheme=custom,CDCOnBoot=cdc,FlashSize=16M"
@@ -26,6 +27,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read firmware version (FW_VERSION in config.h)
+        id: ver
+        run: |
+          VER="$(sed -nE 's/^[[:space:]]*#define[[:space:]]+FW_VERSION[[:space:]]+"([^"]+)".*/\1/p' \
+                 firmware/ReminderESP32/config.h | head -1)"
+          if [ -z "$VER" ]; then echo "::error::FW_VERSION not found in config.h"; exit 1; fi
+          echo "ver=$VER"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          echo "Building v$VER"
 
       - name: Install arduino-cli
         uses: arduino/setup-arduino-cli@v2
@@ -66,10 +77,10 @@ jobs:
           name: firmware-merged
           path: build/firmware-merged.bin
 
-      # ---- everything below only runs when you push a tag like v1.0.0 ----
+      # ---- release: runs on every push to main (skipped for pull requests) ----
 
       - name: Build per-OS one-click flashers
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
           set -e
           mkdir -p dist
@@ -95,9 +106,9 @@ jobs:
           ls -la dist
 
       - name: Build release notes (flasher help + this version's CHANGELOG)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${{ steps.ver.outputs.ver }}"
           {
             echo "### ⚡ Flash it — no tools to install"
             echo ""
@@ -109,7 +120,7 @@ jobs:
             echo "| macOS   | \`ReminderESP32-flasher-macos.zip\`   | double-click **flash-mac.command** (right-click → Open the first time) |"
             echo "| Linux   | \`ReminderESP32-flasher-linux.zip\`   | run **./flash-linux.sh** |"
             echo ""
-            echo "Plug the board in via USB-C first. After flashing, set up Wi-Fi from your phone (join the **\`Alfred-Setup\`** hotspot), then open the IP shown on the screen to configure reminders. \`firmware-merged.bin\` is the raw image if you'd rather flash it yourself."
+            echo "Plug the board in via USB-C first. After flashing, the device raises a **\`Alfred-Setup\`** Wi-Fi hotspot — join it from your phone and pick your network. Then open the IP shown on the screen to set up reminders. \`firmware-merged.bin\` is the raw image if you'd rather flash it yourself."
             echo ""
             echo "---"
             echo ""
@@ -123,10 +134,11 @@ jobs:
           echo "----- release notes -----"; cat release_notes.md
 
       - name: Publish Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          name: "Alfred — the reminder ${{ github.ref_name }}"
+          tag_name: ${{ steps.ver.outputs.tag }}     # created from this commit if it doesn't exist
+          name: "Alfred — the reminder ${{ steps.ver.outputs.tag }}"
           body_path: release_notes.md
           files: |
             dist/ReminderESP32-flasher-windows.zip
@@ -135,9 +147,9 @@ jobs:
             build/firmware-merged.bin
 
       - name: Publish firmware to the web flasher (same-origin, no CORS)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${{ steps.ver.outputs.tag }}"
           git fetch origin main
           git checkout -B main origin/main
           mkdir -p docs/firmware

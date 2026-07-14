@@ -136,12 +136,15 @@ It sets `LV_COLOR_DEPTH 16`, `LV_COLOR_16_SWAP 0`, and enables Montserrat fonts 
 1. Flash it — `build_upload.bat COM8`. **No Wi‑Fi credentials are stored in the
    firmware**, so nothing private ever ships in a build or release. (Timezone
    defaults to India `IST‑5:30` in `config.h`.)
-2. **Set up Wi‑Fi from your phone (one time).** On first boot the screen shows
-   **“Wi‑Fi setup — join Alfred‑Setup”**. On your phone, connect to the
-   **`Alfred-Setup`** Wi‑Fi hotspot; a captive portal opens automatically →
-   pick your home network and enter its password. The device saves it on‑device
-   and reboots. (Powered by [tzapu/WiFiManager](https://github.com/tzapu/WiFiManager).)
-   *If you skip setup, it just runs offline from the RTC — the reminders still work.*
+2. **Set up Wi‑Fi from your phone (one time).** On first boot the device raises its
+   own hotspot and the screen says **“Hotspot is LIVE — `Alfred-Setup`”** with the
+   two steps. On your phone, join the **`Alfred-Setup`** Wi‑Fi; a captive portal
+   opens automatically → pick your home network and enter its password. The
+   credentials are saved on the device.
+   (Powered by [tzapu/WiFiManager](https://github.com/tzapu/WiFiManager).)
+   The portal is **non‑blocking** — the clock, reminders, doorbell and USB all keep
+   working while it waits, so the device never freezes and you can always reflash it.
+   *If you skip setup it simply runs offline from the RTC — reminders still fire.*
 3. Once connected the screen shows a **3‑second plan summary**, then the clock, and
    the **IP address** appears at the top (or `offline` if Wi‑Fi isn’t set up).
 4. Open that **IP in a browser** → the config page.

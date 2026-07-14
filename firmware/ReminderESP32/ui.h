@@ -16,6 +16,7 @@ void ui_update_battery(int pct);           // small battery gauge, top-right nea
 void ui_update_sleep_badge(bool configured, bool onUsb);  // top-left "Zz" + USB status (when sleep is set)
 void ui_boot_summary(const char *text);    // full-screen config summary at power-on
 void ui_boot_summary_hide();
+void ui_wifi_setup(bool show, const char *ap);  // full-screen "hotspot is live, join <ap>" (idempotent)
 void ui_sleep_notice(const char *wakeText);  // "Going to sleep" + next wake, shown before deep sleep
 void ui_hide_sleep_notice();
 void ui_wake_prompt(bool show);            // silent full-screen "Awake? tap to start" (wake-up mode)

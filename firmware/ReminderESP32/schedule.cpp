@@ -119,6 +119,7 @@ void schedule_load() {
     r.accent = strtoul(ac, nullptr, 16);
   }
   g_tapThreshold = doc["tapG"] | 0.45f;
+  if (g_tapThreshold < TAP_MIN_G) g_tapThreshold = TAP_MIN_G;   // below this, IMU noise = phantom taps
 
   g_powerCount = 0;                                  // power/sleep windows
   for (JsonObject o : doc["power"].as<JsonArray>()) {

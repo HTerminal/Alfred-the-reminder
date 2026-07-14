@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiManager.h>          // tzapu/WiFiManager — captive-portal Wi-Fi setup (no hardcoded creds)
+#include <stdarg.h>
 #include <time.h>
 #include <Wire.h>
 #include <esp_sntp.h>
@@ -101,53 +102,60 @@ static void backlight(bool on) {
 }
 
 // ------------------------- Wi-Fi (WiFiManager) -----------------------
-//  No SSID/password lives in this firmware. WiFiManager tries the network
-//  that was saved on the device last time; if there is none, it opens a
-//  captive-portal hotspot (WIFI_AP_NAME) so the user enters Wi-Fi from a
-//  phone. The LCD shows the hotspot name while the portal is open. Either
-//  way it returns after WIFI_PORTAL_TIMEOUT so the reminder clock still
-//  runs from the RTC even if setup is skipped.
+//  No SSID/password lives in this firmware. WiFiManager tries the network that
+//  was saved on the device last time; if there is none it raises a setup hotspot
+//  (WIFI_AP_NAME) that you join from a phone to pick your Wi-Fi.
+//
+//  The portal is deliberately NON-BLOCKING (wm.process() is pumped from loop()).
+//  A blocking portal would freeze setup() for minutes with the SoftAP up, which
+//  stalls the clock/reminders AND leaves USB unresponsive so new firmware can't
+//  be uploaded. Non-blocking keeps everything alive while it waits to be set up.
+static WiFiManager wm;
+static bool portalUp = false;      // the setup hotspot is currently being served
+
 static void connectWiFi() {
-  WiFiManager wm;
   wm.setDebugOutput(false);
-  wm.setConfigPortalTimeout(WIFI_PORTAL_TIMEOUT);
-  wm.setConnectTimeout(20);                 // seconds to try the saved network
-  wm.setAPCallback([](WiFiManager *m) {     // fires when the setup portal opens
-    char msg[200];
-    snprintf(msg, sizeof(msg),
-             "Wi-Fi setup\n\nOn your phone, join\nthis Wi-Fi network:\n\n%s\n\nthen pick your\nhome network",
-             WIFI_AP_NAME);
-    ui_boot_summary(msg);                   // full-screen instructions
-    lv_refr_now(NULL);                      // push to the panel now (loop isn't running yet)
-  });
-  // If a network was set up before, just try it and fall through to offline on
-  // failure (the loop keeps retrying). Only hijack boot with the setup portal
-  // when there are NO saved credentials — i.e. genuine first-time setup — so a
-  // momentarily-down router doesn't trap the device in a portal every boot.
-  if (wm.getWiFiSSID(true).length() > 0) wm.setEnableConfigPortal(false);
-  bool ok = wm.autoConnect(WIFI_AP_NAME);
-  WiFi.mode(WIFI_STA);                      // ensure STA for ESP-NOW even if the portal timed out
-  WiFi.setSleep(false);
+  wm.setTitle(WIFI_PORTAL_TITLE);         // brand the setup page (not "WiFiManager")
+  wm.setConfigPortalBlocking(false);      // never block boot or the main loop
+  wm.setConfigPortalTimeout(0);           // leave the hotspot up until it IS set up
+  wm.setConnectTimeout(15);               // seconds to try the saved network
+  wm.setAPCallback([](WiFiManager *) { portalUp = true; });   // hotspot went live
+
+  bool ok = wm.autoConnect(WIFI_AP_NAME); // returns straight away (non-blocking)
+  if (ok) portalUp = false;
+  WiFi.setSleep(false);                   // keep the radio awake for ESP-NOW
   WiFi.setAutoReconnect(true);
-  Serial.printf("[wifi] autoConnect=%d ip=%s\n", ok, WiFi.localIP().toString().c_str());
+  Serial.printf("[wifi] %s\n", ok ? WiFi.localIP().toString().c_str()
+                                  : "not connected — setup hotspot '" WIFI_AP_NAME "' is live");
 }
 
 // Battery %: GPIO0 reads 1/3 of the pack voltage; average a few samples.
+// Keep the maths signed — an unsigned (mv - BAT_MV_EMPTY) underflows to a huge
+// value on a flat pack and would report 100% instead of 0%.
 static int battery_percent() {
-  uint32_t mv = 0;
-  for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(BAT_ADC_PIN);
+  int32_t mv = 0;
+  for (int i = 0; i < 8; i++) mv += (int32_t)analogReadMilliVolts(BAT_ADC_PIN);
   mv = (mv / 8) * 3;                                    // undo the 1/3 divider
-  int pct = (int)((long)(mv - BAT_MV_EMPTY) * 100 / (BAT_MV_FULL - BAT_MV_EMPTY));
-  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+  int pct = (int)(((mv - BAT_MV_EMPTY) * 100L) / (BAT_MV_FULL - BAT_MV_EMPTY));
+  if (pct < 0)   pct = 0;
+  if (pct > 100) pct = 100;
   return pct;
 }
 
-// "Plugged in / charging" detection. This board has no VBUS-sense pin, but the
-// USB-CDC link reports connected whenever the board is plugged into a USB host
-// (confirmed: reads 1 even mid-charge). We use that as the primary signal, and
-// OR in the battery-at-float-voltage heuristic so a dumb wall charger that has
-// topped the pack off is also treated as plugged.
-static bool onExternalPower() { return (bool)Serial || s_battPct >= CHARGING_PCT; }
+// "Plugged in / charging" detection. This board has no VBUS-sense pin, so we ask
+// the USB Serial/JTAG peripheral whether the USB bus is powered.
+//
+// Use isPlugged(), NOT (bool)Serial: operator bool() is isConnected(), which is
+// only true while a HOST HAS THE PORT OPEN (DTR). Close the serial monitor — or
+// plug into a plain wall charger — and it reads 0 even though USB power is right
+// there, so the device wrongly decided it was on battery and slept/parked Wi-Fi.
+// isPlugged() tracks actual bus power and doesn't flap.
+static bool onExternalPower() {
+#if ARDUINO_USB_CDC_ON_BOOT
+  if (Serial.isPlugged()) return true;
+#endif
+  return s_battPct >= CHARGING_PCT;   // fallback: pack held at the charger's float voltage
+}
 
 // true if the user has configured ANY sleep / power-saving (a non-On window or a
 // low-battery threshold) — used to show the top-left sleep badge.
@@ -157,25 +165,40 @@ static bool sleepConfigured() {
   return false;
 }
 
+// Append to a bounded buffer and return the new offset. snprintf() returns what it
+// WOULD have written, so a naive "p += snprintf(...)" can push p past n and make the
+// next "n - p" underflow (size_t) into a huge length — i.e. a buffer overrun. Clamp.
+static size_t sappend(char *out, size_t n, size_t p, const char *fmt, ...) {
+  if (n == 0 || p >= n - 1) return p;
+  va_list ap;
+  va_start(ap, fmt);
+  int w = vsnprintf(out + p, n - p, fmt, ap);
+  va_end(ap);
+  if (w < 0) return p;
+  p += (size_t)w;
+  return p > n - 1 ? n - 1 : p;
+}
+
 // Build a concise "what will happen when" summary for the boot splash.
 static void buildBootSummary(char *out, size_t n) {
   const char *mn[] = { "On", "Display off", "Deep sleep" };
-  int p = snprintf(out, n, "SLEEP / POWER PLAN\n\n");
-  if (g_wakeupMode) p += snprintf(out + p, n - p, "WAKE-UP MODE ON\ntap screen to start day\n\n");
+  size_t p = 0;
+  p = sappend(out, n, p, "SLEEP / POWER PLAN\n\n");
+  if (g_wakeupMode) p = sappend(out, n, p, "WAKE-UP MODE ON\ntap screen to start day\n\n");
   if (g_powerCount == 0) {
-    p += snprintf(out + p, n - p, "Screen always On\n");
+    p = sappend(out, n, p, "Screen always On\n");
   } else {
-    for (int i = 0; i < g_powerCount && p < (int)n - 1; i++) {
-      int m = g_power[i].mode <= 2 ? g_power[i].mode : 0;
-      p += snprintf(out + p, n - p, "%02d:%02d-%02d:%02d  %s\n",
-                    g_power[i].start / 60, g_power[i].start % 60,
-                    g_power[i].end / 60, g_power[i].end % 60, mn[m]);
+    for (int i = 0; i < g_powerCount; i++) {
+      int m = (g_power[i].mode >= 0 && g_power[i].mode <= 2) ? g_power[i].mode : 0;
+      p = sappend(out, n, p, "%02d:%02d-%02d:%02d  %s\n",
+                  g_power[i].start / 60, g_power[i].start % 60,
+                  g_power[i].end / 60, g_power[i].end % 60, mn[m]);
     }
-    p += snprintf(out + p, n - p, "other hrs:  On\n");
+    p = sappend(out, n, p, "other hrs:  On\n");
   }
-  p += snprintf(out + p, n - p, "\nRing %ds", g_ringSecs);
-  if (g_battDispOff > 0) p += snprintf(out + p, n - p, "   low-batt<%d%%", g_battDispOff);
-  snprintf(out + p, n - p, "\n%d reminders  (USB=no sleep)", g_scheduleCount);
+  p = sappend(out, n, p, "\nRing %ds", g_ringSecs);
+  if (g_battDispOff > 0) p = sappend(out, n, p, "   low-batt<%d%%", g_battDispOff);
+  sappend(out, n, p, "\n%d reminders  (USB=no sleep)", g_scheduleCount);
 }
 
 // effective minute-of-day a reminder fires at — shifted to the wake time in wake-up mode
@@ -440,22 +463,11 @@ void setup() {
   wokeFromTimer = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
   if (!wokeFromTimer) bootGrace = millis() + (uint32_t)BOOT_GRACE_SECONDS * 1000UL;
 
-  // ---- boot banner: the first thing to check when debugging a unit ----
-  //  Says exactly which build is on the board, how it woke, and how much
-  //  room it has. Watch the serial monitor at 115200 baud.
-  Serial.println();
-  Serial.println("========================================");
-  Serial.printf ("[boot] Alfred - the reminder  v%s\n", FW_VERSION);
-  Serial.printf ("[boot] built    : %s %s\n", __DATE__, __TIME__);
-  Serial.printf ("[boot] chip     : %s rev%d, %d MHz, %d core(s)\n",
-                 ESP.getChipModel(), ESP.getChipRevision(),
-                 (int)getCpuFrequencyMhz(), ESP.getChipCores());
-  Serial.printf ("[boot] flash    : %u MB\n", (unsigned)(ESP.getFlashChipSize() / (1024 * 1024)));
-  Serial.printf ("[boot] free heap: %u bytes\n", (unsigned)ESP.getFreeHeap());
-  Serial.printf ("[boot] wake     : %s (reset reason %d)\n",
-                 wokeFromTimer ? "deep-sleep timer" : "power-on / reset",
-                 (int)esp_reset_reason());
-  Serial.println("========================================");
+  // One-line boot banner: which build is on this board, how it woke, free heap.
+  Serial.printf("\n[boot] Alfred v%s (%s) | %s | heap %u\n",
+                FW_VERSION, __DATE__,
+                wokeFromTimer ? "timer-wake" : "power-on",
+                (unsigned)ESP.getFreeHeap());
 
   setenv("TZ", TZ_INFO, 1);   // so mktime() on RTC values is correct before NTP
   tzset();
@@ -598,9 +610,24 @@ void loop() {
     backlight(true);
   }
 
+  // Wi-Fi setup hotspot (non-blocking): keep serving it until a network is picked.
+  // Everything else — clock, reminders, doorbell, USB uploads — stays alive.
+  if (portalUp) {
+    wm.process();                                 // pump the captive portal
+    if (WiFi.status() == WL_CONNECTED) {          // the user just set it up
+      wm.stopConfigPortal();                      // release port 80 for the config page
+      portalUp = false;
+      Serial.printf("[wifi] connected: %s\n", WiFi.localIP().toString().c_str());
+    }
+  }
+  // Say on screen that the hotspot is live and what to join. Stand down while an
+  // alert is on so a reminder is never hidden behind it.
+  ui_wifi_setup(portalUp && !ui_alert_active(), WIFI_AP_NAME);
+
   // start the web server the first time WiFi connects (the system already runs
-  // from the RTC clock without it; the IP/"offline" line is updated once a second)
-  if (!webStarted && WiFi.status() == WL_CONNECTED) {
+  // from the RTC clock without it; the IP/"offline" line is updated once a second).
+  // Wait for the portal to close first — it holds port 80 while it's up.
+  if (!webStarted && !portalUp && WiFi.status() == WL_CONNECTED) {
     webconfig_begin();
     webStarted = true;
   }
@@ -623,8 +650,8 @@ void loop() {
     }
     if (webconfig_wifireset_pending()) {           // web "Reset Wi-Fi" -> forget the network, reopen setup portal
       Serial.println("[web] wifi reset");
-      WiFiManager wm; wm.resetSettings();          // erase the saved credentials
-      delay(200); ESP.restart();                    // reboot with no creds -> phone setup portal
+      wm.resetSettings();                          // erase the saved credentials
+      delay(200); ESP.restart();                    // reboot with no creds -> phone setup hotspot
     }
   }
 
@@ -641,8 +668,14 @@ void loop() {
     ui_update_sleep_badge(sleepConfigured(), plugged); // top-left "Zzz" + USB status
     static int pwrTick = 0;                             // debug log every ~10 s
     if (++pwrTick >= 10) { pwrTick = 0;
-      Serial.printf("[pwr] plugged=%d usb-cdc=%d batt=%d%% wifiMode=%d parked=%d pmode=%d\n",
-                    plugged, (int)(bool)Serial, s_battPct, g_wifiMode, wifiParked, s_pmode);
+      Serial.printf("[pwr] plugged=%d usb-power=%d batt=%d%% wifiMode=%d parked=%d pmode=%d\r\n",
+                    plugged,
+#if ARDUINO_USB_CDC_ON_BOOT
+                    (int)Serial.isPlugged(),
+#else
+                    0,
+#endif
+                    s_battPct, g_wifiMode, wifiParked, s_pmode);
     }
 
     // status line + WiFi management.
@@ -666,9 +699,14 @@ void loop() {
         wifiParked = true;
         Serial.println("[wifi] sync-then-off: parked (ESP-NOW stays on)");
       }
+    } else if (portalUp) {
+      ui_update_status("setup: " WIFI_AP_NAME);         // hotspot live, waiting to be set up
     } else {
       ui_update_status("offline");
-      if (millis() - lastWifiTry >= 20000) { lastWifiTry = millis(); WiFi.begin(); }
+      if (millis() - lastWifiTry >= WIFI_RETRY_SECONDS * 1000UL) {
+        lastWifiTry = millis();
+        WiFi.begin();                                   // retry the saved network
+      }
     }
 
     // NTP just corrected the clock -> persist it into the RTC

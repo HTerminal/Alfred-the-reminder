@@ -6,7 +6,8 @@
 
 // Printed in the serial boot banner — handy when debugging a flashed unit
 // ("which build is actually on this board?"). Watch it at 115200 baud.
-#define FW_VERSION      "1.0.0"
+// Bumping this is what cuts a new release: CI builds and publishes v<FW_VERSION>.
+#define FW_VERSION      "1.0.1"
 
 // ---------- Wi-Fi : set up once from your phone (no hardcoded password) ---
 //  There is NO Wi-Fi name or password stored in this firmware, so nothing
@@ -16,8 +17,11 @@
 //  device itself. Once connected it syncs time from the internet (NTP) at
 //  boot and every hour, so the clock is set-and-forget for years and
 //  survives power cuts.
-#define WIFI_AP_NAME        "Alfred-Setup"   // name of the one-time setup hotspot
-#define WIFI_PORTAL_TIMEOUT 180              // seconds to wait in the setup portal, then carry on offline
+//  The portal is NON-BLOCKING: the clock, reminders, doorbell and USB stay live
+//  the whole time it is up, so the device never freezes waiting to be set up.
+#define WIFI_AP_NAME        "Alfred-Setup"          // the setup hotspot you join from your phone
+#define WIFI_PORTAL_TITLE   "Alfred - the reminder" // heading shown on the setup page
+#define WIFI_RETRY_SECONDS  20                      // how often to retry a saved network when offline
 
 // India Standard Time (UTC+5:30, no daylight saving).
 // POSIX TZ format: name, then offset WEST of UTC -> IST is "IST-5:30".
@@ -84,6 +88,11 @@ enum PowerMode { PWR_ON, PWR_DISPLAY_OFF, PWR_DEEP_SLEEP };
 #define TAP_JERK_G        0.9f   // accel jerk (g) that counts as a tap
 #define TAP_DEBOUNCE_MS   600    // ignore repeat taps within this window
 #define TAP_SETTLE_MS     500    // ignore taps for this long after an alert starts
+// Hard floor for the web-set tap threshold. The QMI8658's own idle noise reads
+// ~0.05-0.18 g of jerk, so anything at/below that turns sensor noise into a
+// constant stream of phantom "taps" — which silently dismisses alerts and spams
+// the log. A real finger tap measures ~0.9 g, so 0.20 g is still very sensitive.
+#define TAP_MIN_G         0.20f
 
 // ---------- ESP-NOW doorbell -----------------------------------------
 //  A separate battery ESP (see firmware/DoorbellButton) sleeps until its

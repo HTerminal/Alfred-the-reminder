@@ -1,6 +1,7 @@
 // Web config: a small HTTP server that shows/edits the schedule and uploads
 // sounds. State is persisted to /config.json (see schedule.cpp).
 #include "webconfig.h"
+#include "config.h"
 #include "schedule.h"
 #include "imu.h"
 #include "ringlog.h"
@@ -89,7 +90,7 @@ input[type=number]{max-width:130px}
  <p class=hint style=margin-top:6px>In "sync then off", WiFi connects once, sets the clock, then leaves the network. Reminders run from the RTC and ESP-NOW rings still work. To reach this page again, reboot the device (it's reachable for ~60s at boot) or after each Save.</p>
  <p class=hint style=margin-top:6px>Wi-Fi is set up from your phone &mdash; there's no password stored in the firmware. To move the device to a different network, use <b>Reset Wi-Fi</b>: it forgets the current network and reopens the <b>&ldquo;Alfred-Setup&rdquo;</b> hotspot so you can pick a new one.</p>
  <label class=fld>Tap to dismiss &mdash; drag left for a lighter tap</label>
- <input type=range id=tap min=0.05 max=1.5 step=0.01 oninput="tapv.textContent=(+this.value).toFixed(2)+' g'">
+ <input type=range id=tap min=0.2 max=1.5 step=0.01 oninput="tapv.textContent=(+this.value).toFixed(2)+' g'">
  <p class=hint style=margin-top:8px>Selected: <b id=tapv></b> &nbsp;&middot;&nbsp; Live tap force: <b id=jerk style=color:var(--acc)>0.00</b> g
   &mdash; tap the device and set the slider just below your peak.</p>
  <div class=row><button class="btn ghost" onclick=testAlert()>&#9654; Test alert on device</button>
@@ -242,7 +243,10 @@ static void handleSave() {
     r.accent = icon_accent(r.icon);
   }
   g_scheduleCount = n;
-  if (!doc["tapG"].isNull()) g_tapThreshold = doc["tapG"].as<float>();
+  if (!doc["tapG"].isNull()) {
+    g_tapThreshold = doc["tapG"].as<float>();
+    if (g_tapThreshold < TAP_MIN_G) g_tapThreshold = TAP_MIN_G;   // keep noise from reading as taps
+  }
 
   if (doc["power"].is<JsonArray>()) {              // power/sleep windows
     g_powerCount = 0;

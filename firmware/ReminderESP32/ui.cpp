@@ -276,6 +276,55 @@ void ui_boot_summary_hide() {
   if (boot_overlay) { lv_obj_del(boot_overlay); boot_overlay = nullptr; }
 }
 
+// ---- Wi-Fi setup overlay: up for as long as the setup hotspot is live ----
+//  Tells the user, on the device itself, that the hotspot is on air and exactly
+//  what to do: join it from a phone, then choose the home network. Idempotent —
+//  safe to call every loop; it only builds/destroys the overlay on a change.
+static lv_obj_t *wifi_overlay = nullptr;
+void ui_wifi_setup(bool show, const char *ap) {
+  if (!show) {
+    if (wifi_overlay) { lv_obj_del(wifi_overlay); wifi_overlay = nullptr; }
+    return;
+  }
+  if (wifi_overlay) return;                       // already showing — don't rebuild
+
+  wifi_overlay = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(wifi_overlay, LCD_W, LCD_H);
+  lv_obj_align(wifi_overlay, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_set_style_bg_color(wifi_overlay, lv_color_hex(COL_BG), 0);
+  lv_obj_set_style_bg_opa(wifi_overlay, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(wifi_overlay, 0, 0);
+  lv_obj_set_style_radius(wifi_overlay, 0, 0);
+  lv_obj_set_style_pad_all(wifi_overlay, 10, 0);
+  lv_obj_clear_flag(wifi_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *hdr = lv_label_create(wifi_overlay);            // "Wi-Fi setup"
+  lv_obj_set_style_text_font(hdr, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(hdr, lv_color_hex(COL_ACCENT), 0);
+  lv_label_set_text(hdr, LV_SYMBOL_WIFI "  Wi-Fi setup");
+  lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 2);
+
+  lv_obj_t *live = lv_label_create(wifi_overlay);           // hotspot is on air + its name
+  lv_obj_set_style_text_font(live, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(live, lv_color_hex(COL_TEXT), 0);
+  lv_label_set_long_mode(live, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(live, LCD_W - 20);
+  lv_obj_set_style_text_align(live, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text_fmt(live, "Hotspot is LIVE\n\n%s", ap);
+  lv_obj_align(live, LV_ALIGN_CENTER, 0, -12);
+
+  lv_obj_t *steps = lv_label_create(wifi_overlay);          // what to actually do
+  lv_obj_set_style_text_font(steps, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(steps, lv_color_hex(COL_DIM), 0);
+  lv_label_set_long_mode(steps, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(steps, LCD_W - 20);
+  lv_obj_set_style_text_align(steps, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(steps, "1. Join this Wi-Fi\n    from your phone\n2. Then pick your\n    home Wi-Fi");
+  lv_obj_align(steps, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+  lv_obj_move_foreground(wifi_overlay);
+}
+
 // ---- "going to sleep" notice, shown for a few seconds before deep sleep ----
 static lv_obj_t *sleep_overlay = nullptr;
 void ui_sleep_notice(const char *wakeText) {
