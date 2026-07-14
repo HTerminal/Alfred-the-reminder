@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alfred – the reminder · Web Flasher</title>
+<style>
+  :root{--bg:#0b0c0f;--card:#16181d;--line:#2a2d34;--fg:#eaecef;--dim:#98a0ac;--acc:#3ea36a;--acc2:#2b8a5b;--dng:#c0483f;--amber:#f2c14e}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0;line-height:1.5}
+  .wrap{max-width:680px;margin:0 auto;padding:26px 16px 60px}
+  h1{font-size:26px;margin:6px 0 2px}
+  .sub{color:var(--dim);margin:0 0 20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0}
+  .step{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--acc);font-weight:700;margin:0 0 10px}
+  label.fl{display:block;font-size:13px;color:var(--dim);margin:12px 0 5px}
+  select,input[type=file]{background:#0f1116;color:var(--fg);border:1px solid #363b44;border-radius:9px;padding:11px;font-size:15px;width:100%}
+  .btn{background:var(--acc2);color:#fff;border:0;border-radius:10px;padding:13px 18px;font-size:16px;font-weight:600;cursor:pointer;width:100%;min-height:50px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.sec{background:#23262e}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .bar{height:12px;background:#0f1116;border-radius:8px;overflow:hidden;margin-top:12px;border:1px solid var(--line)}
+  .bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+  pre{background:#0f1116;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;color:#c7ccd4;max-height:260px;overflow:auto;white-space:pre-wrap;margin:12px 0 0}
+  .warn{background:#3a2417;border:1px solid #5c3b22;color:#f0c48a;border-radius:10px;padding:12px 14px;font-size:14px}
+  .ok{color:var(--acc)} .err{color:#ff8a80} .dim{color:var(--dim)}
+  code{background:#0f1116;padding:2px 6px;border-radius:5px}
+  a{color:var(--acc)}
+  .pill{display:inline-block;background:#0f1116;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:13px;color:var(--amber)}
+</style>
+</head>
+<body><div class="wrap">
+
+  <h1>⏰ Alfred — the reminder</h1>
+  <p class="sub">Flash the firmware onto your <b>Waveshare ESP32‑C6‑LCD‑1.69</b> straight from this page — no downloads, no tools. <span class="dim">(Chrome or Edge on desktop.)</span></p>
+
+  <div id="nosupport" class="warn" style="display:none">
+    ⚠️ This browser can’t talk to USB devices. Please open this page in <b>Chrome</b> or <b>Edge</b> on a computer (Web Serial isn’t available on Firefox, Safari, or phones).
+  </div>
+
+  <div class="card">
+    <p class="step">1 · Choose firmware</p>
+    <label class="fl">Published version</label>
+    <select id="release"><option>Loading…</option></select>
+    <label class="fl">…or upload your own <code>.bin</code></label>
+    <input type="file" id="file" accept=".bin">
+    <p class="dim" id="fwinfo" style="margin:10px 0 0;font-size:13px">No firmware selected yet.</p>
+  </div>
+
+  <div class="card">
+    <p class="step">2 · Connect &amp; flash</p>
+    <p class="dim" style="margin:0 0 12px">Plug the board in with a USB‑C cable, then click below and pick its serial port.</p>
+    <button class="btn" id="flash" disabled>⚡ Connect &amp; Flash</button>
+    <div class="row" style="margin-top:10px"><span class="dim">Chip:</span> <span class="pill" id="chip">—</span></div>
+    <div class="bar"><i id="prog"></i></div>
+    <pre id="log">Ready.</pre>
+  </div>
+
+  <p class="dim" style="font-size:13px">After flashing, the board restarts — open the <b>IP address shown on its screen</b> to set reminders, sounds, sleep schedule and more. Prefer a one‑click app? See the <a href="https://github.com/hterminal/Alfred-the-reminder/releases">Releases</a> page. Source &amp; docs: <a href="https://github.com/hterminal/Alfred-the-reminder">repository</a>.</p>
+
+<script type="module">
+import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.4/bundle.js";
+
+const $ = id => document.getElementById(id);
+const logEl = $("log"), progEl = $("prog");
+let fwBytes = null, fwName = "";
+
+function log(msg, cls){ const t = cls?`<span class="${cls}">${msg}</span>`:msg; logEl.innerHTML += "\n"+t; logEl.scrollTop = logEl.scrollHeight; }
+function setFw(bytes, name){ fwBytes = bytes; fwName = name; $("fwinfo").innerHTML = `Selected: <b>${name}</b> (${(bytes.byteLength/1024/1024).toFixed(2)} MB)`; $("flash").disabled = false; }
+
+if(!("serial" in navigator)){ $("nosupport").style.display="block"; $("flash").disabled = true; }
+
+// --- populate the version dropdown from firmware hosted on THIS site (same-origin, no CORS, no download) ---
+(async () => {
+  try {
+    const list = await fetch("firmware/versions.json", {cache:"no-store"}).then(r=>r.json());
+    const sel = $("release"); sel.innerHTML = "";
+    const o0 = document.createElement("option"); o0.value="";
+    o0.textContent = (list && list.length) ? "— choose a version —" : "No published versions yet — upload a .bin below";
+    sel.appendChild(o0);
+    for(const v of (list||[])){
+      const o = document.createElement("option"); o.value = "firmware/"+v.file;
+      o.textContent = v.tag + (v.date ? "  ("+v.date+")" : ""); sel.appendChild(o);
+    }
+  } catch(e){ $("release").innerHTML = '<option value="">No published versions yet — upload a .bin below</option>'; }
+})();
+
+$("release").addEventListener("change", async e => {
+  const path = e.target.value; if(!path) return;
+  const tag = e.target.selectedOptions[0].textContent.trim();
+  $("fwinfo").textContent = "Loading firmware…"; $("flash").disabled = true;
+  try {
+    const buf = await fetch(path, {cache:"no-store"}).then(r=>{ if(!r.ok) throw new Error(r.status); return r.arrayBuffer(); });
+    setFw(buf, tag);
+  } catch(err){ $("fwinfo").innerHTML = '<span class="err">Couldn\'t load that version — try another, or upload a .bin below.</span>'; }
+});
+
+$("file").addEventListener("change", async e => {
+  const f = e.target.files[0]; if(!f) return;
+  const buf = await f.arrayBuffer(); setFw(buf, f.name);
+});
+
+function ab2bstr(buf){ const u8=new Uint8Array(buf); let s=""; const C=0x8000; for(let i=0;i<u8.length;i+=C){ s+=String.fromCharCode.apply(null,u8.subarray(i,i+C)); } return s; }
+
+$("flash").addEventListener("click", async () => {
+  if(!fwBytes){ log("Select a firmware first.","err"); return; }
+  $("flash").disabled = true; progEl.style.width="0"; logEl.textContent="";
+  const term = { clean(){ logEl.textContent=""; }, writeLine(d){ log(d); }, write(d){ logEl.innerHTML+=d; } };
+  let transport;
+  try {
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, true);
+    const loader = new ESPLoader({ transport, baudrate: 921600, romBaudrate: 115200, terminal: term });
+    log("Connecting…","dim");
+    const chip = await loader.main();
+    $("chip").textContent = chip || "connected";
+    log("Detected: "+chip,"ok");
+    log("Flashing "+fwName+" … (this can take a minute)","dim");
+    await loader.writeFlash({
+      fileArray: [{ data: ab2bstr(fwBytes), address: 0 }],
+      flashSize: "keep", flashMode: "keep", flashFreq: "keep",
+      eraseAll: false, compress: true,
+      reportProgress: (i, written, total) => { progEl.style.width = Math.round(written/total*100)+"%"; },
+    });
+    progEl.style.width = "100%";
+    log("\n✅ Done! The device is restarting.","ok");
+    log("Open the IP address shown on its screen to configure it.","ok");
+    try { await loader.after(); } catch(_){}
+  } catch(err){
+    log("\n❌ "+(err && err.message ? err.message : err),"err");
+    log("Tips: close any serial monitor; try a different USB cable/port; or hold BOOT, tap RESET, release BOOT, then retry.","dim");
+  } finally {
+    try { await transport?.disconnect(); } catch(_){}
+    $("flash").disabled = false;
+  }
+});
+</script>
+</div></body></html>

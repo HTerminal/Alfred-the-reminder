@@ -1,0 +1,25 @@
+# Bundled arduino-cli binary (~36 MB) — install arduino-cli on PATH instead
+firmware/arduino-cli.exe
+
+# Source design files (PSDs / huge renders, ~280 MB) — not needed to build
+imagess/
+
+# SquareLine Studio working dirs
+cache/
+backup/
+components/
+
+# Build artifacts
+**/build/
+*.tmp
+*.bin.bak
+
+# CI packaging staging (created only inside GitHub Actions)
+/dist/
+/pkg-*/
+/et-*/
+et-*.zip
+
+# Never commit project archives
+*.rar
+*.zip

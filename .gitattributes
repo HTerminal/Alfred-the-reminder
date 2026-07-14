@@ -1,0 +1,18 @@
+# Normalize text; keep OS-correct line endings for the flasher scripts.
+* text=auto
+
+*.sh        text eol=lf
+*.command   text eol=lf
+*.bat       text eol=crlf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+
+# Binary assets (never touch line endings)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.wav  binary
+*.mp3  binary
+*.bin  binary
+*.psd  binary
+*.c    text
