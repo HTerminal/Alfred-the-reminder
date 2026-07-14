@@ -440,6 +440,23 @@ void setup() {
   wokeFromTimer = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
   if (!wokeFromTimer) bootGrace = millis() + (uint32_t)BOOT_GRACE_SECONDS * 1000UL;
 
+  // ---- boot banner: the first thing to check when debugging a unit ----
+  //  Says exactly which build is on the board, how it woke, and how much
+  //  room it has. Watch the serial monitor at 115200 baud.
+  Serial.println();
+  Serial.println("========================================");
+  Serial.printf ("[boot] Alfred - the reminder  v%s\n", FW_VERSION);
+  Serial.printf ("[boot] built    : %s %s\n", __DATE__, __TIME__);
+  Serial.printf ("[boot] chip     : %s rev%d, %d MHz, %d core(s)\n",
+                 ESP.getChipModel(), ESP.getChipRevision(),
+                 (int)getCpuFrequencyMhz(), ESP.getChipCores());
+  Serial.printf ("[boot] flash    : %u MB\n", (unsigned)(ESP.getFlashChipSize() / (1024 * 1024)));
+  Serial.printf ("[boot] free heap: %u bytes\n", (unsigned)ESP.getFreeHeap());
+  Serial.printf ("[boot] wake     : %s (reset reason %d)\n",
+                 wokeFromTimer ? "deep-sleep timer" : "power-on / reset",
+                 (int)esp_reset_reason());
+  Serial.println("========================================");
+
   setenv("TZ", TZ_INFO, 1);   // so mktime() on RTC values is correct before NTP
   tzset();
 

@@ -4,6 +4,10 @@
 //  Board: Waveshare ESP32-C6-LCD-1.69  (ST7789V2, 240x280)
 // =====================================================================
 
+// Printed in the serial boot banner — handy when debugging a flashed unit
+// ("which build is actually on this board?"). Watch it at 115200 baud.
+#define FW_VERSION      "1.0.0"
+
 // ---------- Wi-Fi : set up once from your phone (no hardcoded password) ---
 //  There is NO Wi-Fi name or password stored in this firmware, so nothing
 //  private ever ships in a build or a release. On first boot (or after a
